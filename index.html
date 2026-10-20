@@ -1,0 +1,1552 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>SubMeter Pro - Meter Scanner & Bill Generator</title>
+  
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Lucide Icons -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <!-- Tesseract.js for On-Device OCR Meter Scanning -->
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            brand: {
+              50: '#ecfdf5',
+              100: '#d1fae5',
+              500: '#10b981',
+              600: '#059669',
+              700: '#047857',
+              800: '#065f46',
+            },
+            electric: {
+              500: '#0284c7',
+              600: '#0369a1',
+            }
+          }
+        }
+      }
+    }
+  </script>
+  
+  <style>
+    @media print {
+      body * {
+        visibility: hidden;
+      }
+      #printInvoiceArea, #printInvoiceArea * {
+        visibility: visible;
+      }
+      #printInvoiceArea {
+        position: absolute;
+        left: 0;
+        top: 0;
+        width: 100%;
+        margin: 0;
+        padding: 20px;
+        background: white;
+      }
+      .no-print {
+        display: none !important;
+      }
+    }
+
+    /* Reticle viewfinder scan animation */
+    @keyframes scanLine {
+      0% { top: 10%; opacity: 0.8; }
+      50% { top: 90%; opacity: 1; }
+      100% { top: 10%; opacity: 0.8; }
+    }
+    .scanner-laser {
+      position: absolute;
+      left: 5%;
+      right: 5%;
+      height: 2px;
+      background: linear-gradient(90deg, transparent, #ef4444, #10b981, transparent);
+      box-shadow: 0 0 8px 2px rgba(16, 185, 129, 0.7);
+      animation: scanLine 2.2s ease-in-out infinite;
+    }
+  </style>
+</head>
+<body class="bg-slate-900 text-slate-100 min-h-screen flex flex-col font-sans pb-20 md:pb-6 antialiased selection:bg-brand-500 selection:text-white">
+
+  <!-- TOP APP BAR -->
+  <header class="bg-slate-800/90 backdrop-blur border-b border-slate-700/70 sticky top-0 z-30 px-4 py-3 shadow-md">
+    <div class="max-w-4xl mx-auto flex items-center justify-between">
+      <div class="flex items-center gap-2.5">
+        <div class="w-9 h-9 rounded-xl bg-gradient-to-tr from-brand-600 to-emerald-400 flex items-center justify-center text-white shadow-lg shadow-brand-500/20">
+          <i data-lucide="zap" class="w-5 h-5 fill-current"></i>
+        </div>
+        <div>
+          <h1 class="text-base md:text-lg font-bold tracking-tight text-white flex items-center gap-1.5">
+            SubMeter <span class="text-xs px-1.5 py-0.5 rounded bg-brand-500/20 text-brand-400 font-semibold border border-brand-500/30">PRO</span>
+          </h1>
+          <p class="text-[11px] text-slate-400 font-medium">Standard Tariff: ₹6.00 / Unit</p>
+        </div>
+      </div>
+
+      <div class="flex items-center gap-2">
+        <button id="quickSampleBtn" onclick="loadSampleMeterImage()" class="text-xs bg-slate-700 hover:bg-slate-600 text-slate-200 px-2.5 py-1.5 rounded-lg border border-slate-600 flex items-center gap-1.5 transition">
+          <i data-lucide="sparkles" class="w-3.5 h-3.5 text-amber-400"></i>
+          <span>Sample Meter</span>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <!-- MAIN NAVIGATION TABS -->
+  <nav class="max-w-4xl mx-auto w-full px-4 pt-3 pb-1">
+    <div class="grid grid-cols-3 gap-1 bg-slate-800/80 p-1 rounded-xl border border-slate-700/60 text-xs sm:text-sm font-medium">
+      <button onclick="switchTab('scannerTab')" id="tabBtn-scannerTab" class="tab-btn flex items-center justify-center gap-1.5 py-2 px-3 rounded-lg bg-brand-600 text-white shadow font-semibold transition">
+        <i data-lucide="scan-line" class="w-4 h-4"></i>
+        <span>Scan & Bill</span>
+      </button>
+      <button onclick="switchTab('tenantsTab')" id="tabBtn-tenantsTab" class="tab-btn flex items-center justify-center gap-1.5 py-2 px-3 rounded-lg text-slate-400 hover:text-slate-200 transition">
+        <i data-lucide="users" class="w-4 h-4"></i>
+        <span>Tenants</span>
+      </button>
+      <button onclick="switchTab('historyTab')" id="tabBtn-historyTab" class="tab-btn flex items-center justify-center gap-1.5 py-2 px-3 rounded-lg text-slate-400 hover:text-slate-200 transition">
+        <i data-lucide="receipt" class="w-4 h-4"></i>
+        <span>History (<span id="historyCountBadge">0</span>)</span>
+      </button>
+    </div>
+  </nav>
+
+  <!-- CONTENT CONTAINER -->
+  <main class="max-w-4xl mx-auto w-full px-4 py-4 flex-1">
+
+    <!-- ==============================================
+         TAB 1: SCAN & GENERATE BILL
+         ============================================== -->
+    <section id="scannerTab" class="tab-content space-y-4">
+      
+      <!-- Tenant Selector & Rate Banner -->
+      <div class="bg-slate-800/80 rounded-2xl p-4 border border-slate-700/70 shadow-sm space-y-3">
+        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+          <label class="text-xs font-semibold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
+            <i data-lucide="user-check" class="w-4 h-4 text-brand-400"></i> Select Submeter Tenant
+          </label>
+          <div class="flex items-center gap-1.5 bg-slate-900/60 px-3 py-1 rounded-full border border-slate-700 w-fit">
+            <span class="text-xs text-slate-400">Tariff Rate:</span>
+            <span class="text-xs font-bold text-emerald-400">₹6.00 / kWh</span>
+          </div>
+        </div>
+
+        <div class="grid grid-cols-1 sm:grid-cols-12 gap-2">
+          <div class="sm:col-span-8">
+            <select id="activeTenantSelect" onchange="onTenantSelected()" class="w-full bg-slate-900 border border-slate-700 rounded-xl px-3.5 py-2.5 text-sm font-medium focus:ring-2 focus:ring-brand-500 focus:border-brand-500 text-slate-200 outline-none">
+              <!-- populated dynamically -->
+            </select>
+          </div>
+          <div class="sm:col-span-4 flex items-center">
+            <button onclick="openAddTenantModal()" class="w-full py-2.5 px-3 bg-slate-700 hover:bg-slate-600 text-slate-200 rounded-xl text-xs font-medium border border-slate-600 flex items-center justify-center gap-1.5 transition">
+              <i data-lucide="user-plus" class="w-4 h-4 text-brand-400"></i>
+              <span>New Submeter</span>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- CAMERA / PHOTO OCR SCANNER CARD -->
+      <div class="bg-slate-800 rounded-2xl border border-slate-700 overflow-hidden shadow-xl">
+        <div class="p-3 bg-slate-800/90 border-b border-slate-700 flex items-center justify-between">
+          <span class="text-xs font-bold tracking-wide uppercase text-slate-300 flex items-center gap-1.5">
+            <i data-lucide="camera" class="w-4 h-4 text-brand-400"></i> Meter Digit Optical Scanner
+          </span>
+          <span id="scanStatusBadge" class="text-[11px] px-2 py-0.5 rounded-full bg-slate-700 text-slate-300 font-medium">Ready</span>
+        </div>
+
+        <!-- Viewfinder Box -->
+        <div class="relative bg-black aspect-[16/10] sm:aspect-[16/9] flex items-center justify-center overflow-hidden">
+          
+          <!-- Live Camera Video -->
+          <video id="cameraVideo" playsinline autoplay muted class="w-full h-full object-cover hidden"></video>
+
+          <!-- Captured Image Preview / Sample Image -->
+          <img id="imagePreview" src="" alt="Meter View" class="w-full h-full object-contain hidden" />
+
+          <!-- Initial Placeholder -->
+          <div id="scannerPlaceholder" class="text-center p-6 space-y-3">
+            <div class="w-14 h-14 mx-auto rounded-2xl bg-slate-800/80 border border-slate-700 flex items-center justify-center text-slate-400">
+              <i data-lucide="gauge" class="w-8 h-8 text-brand-400"></i>
+            </div>
+            <div>
+              <p class="text-sm font-semibold text-slate-200">Align Meter Display in Box</p>
+              <p class="text-xs text-slate-400 mt-0.5">Start live camera or upload photo of the reading</p>
+            </div>
+          </div>
+
+          <!-- Laser Scan Line -->
+          <div id="scanLaser" class="scanner-laser hidden"></div>
+
+          <!-- Targeting Frame / Crop Overlay -->
+          <div id="targetBox" class="absolute inset-8 sm:inset-12 border-2 border-dashed border-emerald-400/80 rounded-xl pointer-events-none flex flex-col justify-between p-2 shadow-inner">
+            <div class="flex justify-between items-center">
+              <span class="text-[10px] font-mono font-bold bg-slate-900/80 px-1.5 py-0.5 rounded text-emerald-300">ALIGN LCD / NUMBERS</span>
+              <span class="text-[10px] font-mono text-emerald-300 bg-slate-900/80 px-1.5 py-0.5 rounded">kWh</span>
+            </div>
+            <div class="text-center">
+              <span class="text-[10px] font-mono text-slate-300/80 bg-slate-900/60 px-2 py-0.5 rounded">Keep steady & avoid glare</span>
+            </div>
+          </div>
+
+          <!-- Hidden processing canvas -->
+          <canvas id="cropCanvas" class="hidden"></canvas>
+        </div>
+
+        <!-- OCR Processing Progress Bar -->
+        <div id="ocrProgressContainer" class="hidden bg-slate-900 px-4 py-2.5 border-t border-slate-700">
+          <div class="flex items-center justify-between text-xs text-slate-300 mb-1">
+            <span id="ocrStatusText" class="font-medium flex items-center gap-1.5">
+              <i data-lucide="loader-2" class="w-3.5 h-3.5 text-brand-400 animate-spin"></i> Reading meter digits...
+            </span>
+            <span id="ocrPercent" class="font-mono text-brand-400 font-semibold">0%</span>
+          </div>
+          <div class="w-full bg-slate-800 rounded-full h-1.5 overflow-hidden">
+            <div id="ocrProgressBar" class="bg-brand-500 h-full rounded-full transition-all duration-200" style="width: 0%"></div>
+          </div>
+        </div>
+
+        <!-- Scanner Controls Toolbar -->
+        <div class="p-3 bg-slate-800/90 border-t border-slate-700 flex flex-wrap items-center justify-between gap-2">
+          <div class="flex items-center gap-2">
+            <!-- Start/Stop Camera -->
+            <button id="toggleCameraBtn" onclick="toggleCamera()" class="px-3 py-2 bg-slate-700 hover:bg-slate-600 text-slate-200 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition">
+              <i data-lucide="video" class="w-4 h-4 text-emerald-400"></i>
+              <span id="cameraBtnText">Start Camera</span>
+            </button>
+
+            <!-- File Upload -->
+            <label class="cursor-pointer px-3 py-2 bg-slate-700 hover:bg-slate-600 text-slate-200 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition">
+              <i data-lucide="upload" class="w-4 h-4 text-sky-400"></i>
+              <span>Upload Photo</span>
+              <input type="file" id="imageFileInput" accept="image/*" class="hidden" onchange="handleImageUpload(event)" />
+            </label>
+          </div>
+
+          <!-- Capture & Run OCR Button -->
+          <button id="captureRunBtn" onclick="captureAndProcess()" disabled class="px-4 py-2 bg-brand-600 hover:bg-brand-500 disabled:bg-slate-700 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-xl text-xs font-bold flex items-center gap-1.5 transition shadow-lg shadow-brand-600/30">
+            <i data-lucide="sparkles" class="w-4 h-4"></i>
+            <span>Scan Numbers</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- OCR DETECTED CANDIDATES CHIPS (IF ANY) -->
+      <div id="ocrSuggestionsBox" class="hidden bg-slate-800/80 rounded-2xl p-3 border border-slate-700 space-y-1.5">
+        <p class="text-[11px] font-semibold text-slate-400 uppercase tracking-wider flex items-center gap-1">
+          <i data-lucide="help-circle" class="w-3.5 h-3.5 text-brand-400"></i> Tap Detected Reading to Apply:
+        </p>
+        <div id="detectedBadgesList" class="flex flex-wrap gap-2 pt-1">
+          <!-- Badges dynamically inserted -->
+        </div>
+      </div>
+
+      <!-- BILL CALCULATION FORM & READINGS -->
+      <div class="bg-slate-800 rounded-2xl p-4 border border-slate-700 shadow-md space-y-4">
+        <div class="flex items-center justify-between border-b border-slate-700/60 pb-3">
+          <h2 class="text-sm font-bold text-white flex items-center gap-2">
+            <i data-lucide="calculator" class="w-4 h-4 text-brand-400"></i> Unit Consumption & Billing
+          </h2>
+          <span class="text-xs text-slate-400">Rate: <strong>₹6.00/unit</strong></span>
+        </div>
+
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <!-- Previous Reading -->
+          <div class="space-y-1.5">
+            <div class="flex items-center justify-between">
+              <label class="text-xs font-semibold text-slate-300">Previous Reading (kWh)</label>
+              <span id="prevDateText" class="text-[10px] text-slate-400">Baseline</span>
+            </div>
+            <div class="relative">
+              <input type="number" id="prevReadingInput" step="any" oninput="calculateBill()" class="w-full bg-slate-900 border border-slate-700 rounded-xl px-3.5 py-2.5 text-sm font-mono font-bold text-slate-200 outline-none focus:ring-2 focus:ring-brand-500" placeholder="0.0">
+              <span class="absolute right-3 top-2.5 text-xs text-slate-500 font-mono">kWh</span>
+            </div>
+          </div>
+
+          <!-- Current Reading (Auto-filled by Scanner) -->
+          <div class="space-y-1.5">
+            <div class="flex items-center justify-between">
+              <label class="text-xs font-semibold text-brand-400 flex items-center gap-1">
+                <i data-lucide="check-circle" class="w-3 h-3"></i> Current Reading (kWh)
+              </label>
+              <span class="text-[10px] text-emerald-400 font-medium">From OCR / Manual</span>
+            </div>
+            <div class="relative">
+              <input type="number" id="currReadingInput" step="any" oninput="calculateBill()" class="w-full bg-slate-900 border-2 border-brand-500/80 rounded-xl px-3.5 py-2.5 text-sm font-mono font-bold text-emerald-300 outline-none focus:ring-2 focus:ring-brand-400" placeholder="e.g. 1420.5">
+              <span class="absolute right-3 top-2.5 text-xs text-brand-400 font-mono">kWh</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Additional Optional Charges -->
+        <div class="pt-2 border-t border-slate-700/60">
+          <div class="flex items-center justify-between text-xs text-slate-400 mb-2 cursor-pointer select-none" onclick="toggleExtraCharges()">
+            <span class="font-medium flex items-center gap-1 text-slate-300">
+              <i data-lucide="plus-circle" class="w-3.5 h-3.5 text-slate-400"></i> Optional Extra Charges (Fixed / Maintenance)
+            </span>
+            <i id="extraChevron" data-lucide="chevron-down" class="w-4 h-4 transition-transform"></i>
+          </div>
+
+          <div id="extraChargesContainer" class="hidden grid-cols-1 sm:grid-cols-2 gap-3 pt-2">
+            <div>
+              <label class="text-[11px] text-slate-400">Fixed / Maintenance Charge (₹)</label>
+              <input type="number" id="fixedChargeInput" value="0" min="0" oninput="calculateBill()" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs font-mono text-slate-200 outline-none">
+            </div>
+            <div>
+              <label class="text-[11px] text-slate-400">Common Area / Water Charge (₹)</label>
+              <input type="number" id="commonChargeInput" value="0" min="0" oninput="calculateBill()" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs font-mono text-slate-200 outline-none">
+            </div>
+          </div>
+        </div>
+
+        <!-- LIVE BILL SUMMARY CARD -->
+        <div class="bg-gradient-to-br from-slate-900 via-slate-900 to-emerald-950/40 rounded-xl p-4 border border-emerald-500/30 space-y-3">
+          
+          <div class="grid grid-cols-2 sm:grid-cols-3 gap-3 text-center sm:text-left">
+            <div class="bg-slate-800/60 p-2.5 rounded-lg border border-slate-700/60">
+              <div class="text-[11px] text-slate-400">Units Consumed</div>
+              <div id="unitsConsumedDisplay" class="text-lg font-mono font-bold text-white">0.00 <span class="text-xs font-normal text-slate-400">Units</span></div>
+            </div>
+
+            <div class="bg-slate-800/60 p-2.5 rounded-lg border border-slate-700/60">
+              <div class="text-[11px] text-slate-400">Tariff Calculation</div>
+              <div class="text-sm font-mono font-bold text-slate-200 mt-0.5">
+                <span id="rateMathDisplay">0 × ₹6.00</span>
+              </div>
+            </div>
+
+            <div class="col-span-2 sm:col-span-1 bg-brand-500/10 p-2.5 rounded-lg border border-brand-500/30 flex sm:flex-col items-center justify-between sm:justify-center">
+              <div class="text-[11px] text-brand-300 font-semibold uppercase">Total Payable</div>
+              <div id="totalPayableDisplay" class="text-xl font-bold font-mono text-emerald-400">₹ 0.00</div>
+            </div>
+          </div>
+
+          <!-- Error Alert if Current < Previous -->
+          <div id="readingErrorAlert" class="hidden p-2.5 rounded-lg bg-rose-500/15 border border-rose-500/40 text-xs text-rose-300 flex items-center gap-2">
+            <i data-lucide="alert-triangle" class="w-4 h-4 text-rose-400 shrink-0"></i>
+            <span>Current reading cannot be lower than previous reading (<span id="errPrevVal">0</span> kWh).</span>
+          </div>
+
+          <!-- Action Buttons -->
+          <div class="pt-2 flex flex-col sm:flex-row items-center gap-2">
+            <button onclick="generateAndOpenBill()" id="genBillBtn" class="w-full sm:flex-1 py-3 bg-brand-600 hover:bg-brand-500 text-white rounded-xl text-sm font-bold flex items-center justify-center gap-2 shadow-lg shadow-brand-600/30 transition">
+              <i data-lucide="receipt-text" class="w-4 h-4"></i>
+              <span>Generate Invoice Receipt</span>
+            </button>
+            <button onclick="sendDirectWhatsApp()" class="w-full sm:w-auto px-4 py-3 bg-emerald-700 hover:bg-emerald-600 text-white rounded-xl text-sm font-bold flex items-center justify-center gap-2 transition">
+              <i data-lucide="message-square" class="w-4 h-4"></i>
+              <span>WhatsApp</span>
+            </button>
+          </div>
+        </div>
+
+      </div>
+
+    </section>
+
+    <!-- ==============================================
+         TAB 2: SUBMETERS & TENANTS DIRECTORY
+         ============================================== -->
+    <section id="tenantsTab" class="tab-content hidden space-y-4">
+      <div class="flex items-center justify-between">
+        <div>
+          <h2 class="text-base font-bold text-white">Submeter Directory</h2>
+          <p class="text-xs text-slate-400">Manage tenants and their baseline meter numbers</p>
+        </div>
+        <button onclick="openAddTenantModal()" class="px-3 py-2 bg-brand-600 hover:bg-brand-500 text-white rounded-xl text-xs font-semibold flex items-center gap-1.5 transition shadow">
+          <i data-lucide="user-plus" class="w-3.5 h-3.5"></i>
+          <span>Add Tenant</span>
+        </button>
+      </div>
+
+      <div id="tenantsListGrid" class="grid grid-cols-1 md:grid-cols-2 gap-3">
+        <!-- Rendered dynamically -->
+      </div>
+    </section>
+
+    <!-- ==============================================
+         TAB 3: BILLING HISTORY
+         ============================================== -->
+    <section id="historyTab" class="tab-content hidden space-y-4">
+      <div class="flex items-center justify-between">
+        <div>
+          <h2 class="text-base font-bold text-white">Generated Bills</h2>
+          <p class="text-xs text-slate-400">All issued submeter invoices calculated @ ₹6/unit</p>
+        </div>
+        <button onclick="exportHistoryCSV()" class="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 rounded-xl text-xs font-medium flex items-center gap-1.5 transition">
+          <i data-lucide="download" class="w-3.5 h-3.5 text-slate-400"></i>
+          <span>Export CSV</span>
+        </button>
+      </div>
+
+      <div id="historyList" class="space-y-3">
+        <!-- Invoices rendered here -->
+      </div>
+    </section>
+
+  </main>
+
+  <!-- ==============================================
+       MODAL: GENERATED INVOICE / PRINTABLE RECEIPT
+       ============================================== -->
+  <div id="invoiceModal" class="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-3 hidden">
+    <div class="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto flex flex-col shadow-2xl">
+      
+      <!-- Modal Header -->
+      <div class="p-4 border-b border-slate-700 flex items-center justify-between bg-slate-800/80">
+        <h3 class="text-sm font-bold text-white flex items-center gap-2">
+          <i data-lucide="file-check" class="w-4 h-4 text-brand-400"></i> Submeter Electricity Bill
+        </h3>
+        <button onclick="closeInvoiceModal()" class="p-1 rounded-lg text-slate-400 hover:text-white hover:bg-slate-700 transition">
+          <i data-lucide="x" class="w-5 h-5"></i>
+        </button>
+      </div>
+
+      <!-- Printable Area (Formatted neatly for print and display) -->
+      <div id="printInvoiceArea" class="p-5 text-slate-800 bg-white space-y-4">
+        
+        <!-- Receipt Header -->
+        <div class="border-b-2 border-slate-900 pb-3 flex justify-between items-start">
+          <div>
+            <div class="flex items-center gap-1.5 text-emerald-700 font-extrabold text-lg tracking-tight">
+              <i data-lucide="zap" class="w-5 h-5 fill-current"></i>
+              <span>ELECTRICITY SUBMETER BILL</span>
+            </div>
+            <p class="text-xs text-slate-500 font-medium">Private Sub-Metering Statement</p>
+            <p id="invBillNo" class="text-[11px] font-mono font-bold text-slate-700 mt-1">INV-2026-001</p>
+          </div>
+          <div class="text-right">
+            <span class="inline-block bg-emerald-100 text-emerald-800 font-mono text-[11px] px-2 py-0.5 rounded font-bold border border-emerald-300">
+              RATE: ₹6.00 / UNIT
+            </span>
+            <p id="invDate" class="text-xs text-slate-600 mt-1.5 font-medium">Date: --</p>
+          </div>
+        </div>
+
+        <!-- Tenant & Meter Meta -->
+        <div class="grid grid-cols-2 gap-3 text-xs bg-slate-50 p-3 rounded-lg border border-slate-200">
+          <div>
+            <span class="text-slate-400 font-medium block">BILLED TO:</span>
+            <h4 id="invTenantName" class="font-bold text-slate-900 text-sm">--</h4>
+            <p id="invTenantRoom" class="text-slate-600 font-medium">Room / Unit: --</p>
+            <p id="invTenantPhone" class="text-slate-500">Phone: --</p>
+          </div>
+          <div class="text-right">
+            <span class="text-slate-400 font-medium block">METER DETAILS:</span>
+            <p id="invMeterNo" class="font-mono font-bold text-slate-800">Meter #: --</p>
+            <p id="invBillingPeriod" class="text-slate-600">Period: Current Cycle</p>
+            <p class="text-emerald-700 font-semibold mt-0.5">Status: Due on Receipt</p>
+          </div>
+        </div>
+
+        <!-- Meter Reading Breakdown Table -->
+        <table class="w-full text-xs border-collapse">
+          <thead>
+            <tr class="bg-slate-100 border-y border-slate-300 text-slate-700">
+              <th class="py-2 px-2 text-left font-bold">Meter Details</th>
+              <th class="py-2 px-2 text-right font-bold">Reading (kWh)</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-slate-200">
+            <tr>
+              <td class="py-2 px-2 text-slate-600">Current Reading (Final)</td>
+              <td id="invCurrReading" class="py-2 px-2 text-right font-mono font-bold text-slate-900">0.00</td>
+            </tr>
+            <tr>
+              <td class="py-2 px-2 text-slate-600">Previous Reading (Initial)</td>
+              <td id="invPrevReading" class="py-2 px-2 text-right font-mono text-slate-600">0.00</td>
+            </tr>
+            <tr class="bg-emerald-50/70 font-semibold">
+              <td class="py-2 px-2 text-emerald-900">Total Units Consumed</td>
+              <td id="invUnits" class="py-2 px-2 text-right font-mono font-extrabold text-emerald-800 text-sm">0.00 kWh</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <!-- Financial Charges Breakdown -->
+        <div class="border-t border-slate-300 pt-2 space-y-1.5 text-xs">
+          <div class="flex justify-between text-slate-600">
+            <span>Energy Charge (<span id="invRateUnitsFormula">0 units × ₹6.00</span>)</span>
+            <span id="invEnergyCharge" class="font-mono font-medium text-slate-900">₹ 0.00</span>
+          </div>
+          <div id="invFixedRow" class="flex justify-between text-slate-600">
+            <span>Fixed / Maintenance Charge</span>
+            <span id="invFixedCharge" class="font-mono font-medium text-slate-900">₹ 0.00</span>
+          </div>
+          <div id="invCommonRow" class="flex justify-between text-slate-600">
+            <span>Common / Water Charge</span>
+            <span id="invCommonCharge" class="font-mono font-medium text-slate-900">₹ 0.00</span>
+          </div>
+          <div class="border-t-2 border-slate-800 pt-2 mt-2 flex justify-between items-center">
+            <div>
+              <span class="text-sm font-extrabold text-slate-900">TOTAL AMOUNT PAYABLE</span>
+              <p class="text-[10px] text-slate-500 font-medium">Please pay by UPI or Cash within 5 days</p>
+            </div>
+            <div id="invTotalAmount" class="text-xl font-extrabold font-mono text-emerald-700">₹ 0.00</div>
+          </div>
+        </div>
+
+        <!-- Note footer -->
+        <div class="bg-amber-50 border border-amber-200 rounded p-2 text-[10px] text-amber-800 flex items-start gap-1.5">
+          <i data-lucide="info" class="w-3.5 h-3.5 text-amber-600 shrink-0 mt-0.5"></i>
+          <span>Calculated strictly as per submeter consumption tariff of ₹6.00 per kilowatt-hour (unit). Retain this receipt for verification.</span>
+        </div>
+      </div>
+
+      <!-- Action Buttons in Modal -->
+      <div class="p-4 border-t border-slate-700 bg-slate-800/80 flex flex-wrap items-center justify-between gap-2">
+        <button onclick="copyBillText()" class="px-3 py-2 bg-slate-700 hover:bg-slate-600 text-slate-200 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition">
+          <i data-lucide="copy" class="w-4 h-4 text-slate-300"></i>
+          <span>Copy Summary</span>
+        </button>
+
+        <div class="flex items-center gap-2">
+          <button onclick="window.print()" class="px-3 py-2 bg-slate-700 hover:bg-slate-600 text-slate-200 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition">
+            <i data-lucide="printer" class="w-4 h-4 text-sky-400"></i>
+            <span>Print Bill</span>
+          </button>
+          
+          <button onclick="sendInvoiceWhatsApp()" class="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 transition shadow-md">
+            <i data-lucide="send" class="w-4 h-4"></i>
+            <span>Send WhatsApp</span>
+          </button>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ==============================================
+       MODAL: ADD / EDIT TENANT
+       ============================================== -->
+  <div id="tenantModal" class="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-3 hidden">
+    <div class="bg-slate-800 border border-slate-700 rounded-2xl w-full max-w-md p-5 space-y-4 shadow-2xl">
+      <div class="flex items-center justify-between border-b border-slate-700 pb-3">
+        <h3 id="tenantModalTitle" class="text-sm font-bold text-white flex items-center gap-2">
+          <i data-lucide="user-plus" class="w-4 h-4 text-brand-400"></i> Add Submeter Tenant
+        </h3>
+        <button onclick="closeTenantModal()" class="text-slate-400 hover:text-white p-1">
+          <i data-lucide="x" class="w-5 h-5"></i>
+        </button>
+      </div>
+
+      <form onsubmit="handleSaveTenant(event)" class="space-y-3 text-xs">
+        <input type="hidden" id="tenantEditId" value="">
+
+        <div>
+          <label class="font-semibold text-slate-300 block mb-1">Tenant Name *</label>
+          <input type="text" id="tNameInput" required placeholder="e.g. Rahul Sharma" class="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-slate-200 outline-none focus:ring-2 focus:ring-brand-500">
+        </div>
+
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="font-semibold text-slate-300 block mb-1">Room / Flat No. *</label>
+            <input type="text" id="tRoomInput" required placeholder="e.g. 101 / 2B" class="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-slate-200 outline-none focus:ring-2 focus:ring-brand-500">
+          </div>
+          <div>
+            <label class="font-semibold text-slate-300 block mb-1">Meter Serial / Tag</label>
+            <input type="text" id="tMeterInput" placeholder="e.g. MTR-409" class="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-slate-200 outline-none focus:ring-2 focus:ring-brand-500">
+          </div>
+        </div>
+
+        <div>
+          <label class="font-semibold text-slate-300 block mb-1">WhatsApp Phone Number</label>
+          <div class="flex">
+            <span class="inline-flex items-center px-3 rounded-l-xl border border-r-0 border-slate-700 bg-slate-900 text-slate-400 font-mono text-xs">+91</span>
+            <input type="tel" id="tPhoneInput" placeholder="9876543210" class="w-full bg-slate-900 border border-slate-700 rounded-r-xl px-3 py-2 text-slate-200 outline-none focus:ring-2 focus:ring-brand-500">
+          </div>
+        </div>
+
+        <div>
+          <label class="font-semibold text-slate-300 block mb-1">Initial / Previous Meter Reading (kWh) *</label>
+          <input type="number" id="tInitialReadingInput" step="any" required placeholder="e.g. 1250.0" class="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 font-mono text-slate-200 outline-none focus:ring-2 focus:ring-brand-500">
+        </div>
+
+        <div class="pt-3 flex items-center justify-end gap-2">
+          <button type="button" onclick="closeTenantModal()" class="px-4 py-2 bg-slate-700 text-slate-300 rounded-xl hover:bg-slate-600 transition">Cancel</button>
+          <button type="submit" class="px-4 py-2 bg-brand-600 hover:bg-brand-500 text-white font-bold rounded-xl shadow transition">Save Tenant</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- TOAST NOTIFICATION CONTAINER -->
+  <div id="toast" class="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 px-4 py-2.5 rounded-xl text-xs font-semibold shadow-2xl transition-all duration-300 transform translate-y-20 opacity-0 flex items-center gap-2 pointer-events-none">
+    <i id="toastIcon" data-lucide="info" class="w-4 h-4"></i>
+    <span id="toastMessage">Notification</span>
+  </div>
+
+  <!-- JAVASCRIPT APPLICATION LOGIC -->
+  <script>
+    // ==========================================
+    // CONSTANTS & IN-MEMORY STATE
+    // ==========================================
+    const UNIT_RATE = 6.00; // Fixed rate ₹6 per unit
+
+    // Initial preloaded mock directory of submeters
+    let tenants = [
+      { id: 't1', name: 'Rajesh Sharma', room: 'Flat 101', phone: '9876543210', meterNo: 'MTR-101', lastReading: 1240.0, lastBillingDate: '2026-08-01' },
+      { id: 't2', name: 'Priya Mukherjee', room: 'Flat 202', phone: '9845012345', meterNo: 'MTR-202', lastReading: 852.5, lastBillingDate: '2026-08-01' },
+      { id: 't3', name: 'Amit Verma', room: 'Room 3B', phone: '9123456780', meterNo: 'MTR-303', lastReading: 2110.0, lastBillingDate: '2026-08-05' }
+    ];
+
+    let billsHistory = [
+      {
+        id: 'INV-2026-0901',
+        tenantId: 't1',
+        tenantName: 'Rajesh Sharma',
+        room: 'Flat 101',
+        phone: '9876543210',
+        meterNo: 'MTR-101',
+        prevReading: 1120.0,
+        currReading: 1240.0,
+        units: 120.0,
+        rate: 6.00,
+        energyCharge: 720.0,
+        fixedCharge: 0,
+        commonCharge: 0,
+        total: 720.0,
+        date: '2026-08-01',
+        status: 'Paid'
+      }
+    ];
+
+    let activeStream = null;
+    let currentInvoiceData = null;
+    let selectedTenantId = 't1';
+
+    // ==========================================
+    // INITIALIZATION
+    // ==========================================
+    window.addEventListener('DOMContentLoaded', () => {
+      lucide.createIcons();
+      populateTenantDropdown();
+      onTenantSelected();
+      renderTenantsList();
+      renderHistoryList();
+    });
+
+    // ==========================================
+    // TABS SWITCHING
+    // ==========================================
+    function switchTab(tabId) {
+      document.querySelectorAll('.tab-content').forEach(el => el.classList.add('hidden'));
+      document.querySelectorAll('.tab-btn').forEach(btn => {
+        btn.classList.remove('bg-brand-600', 'text-white', 'shadow', 'font-semibold');
+        btn.classList.add('text-slate-400');
+      });
+
+      const selectedContent = document.getElementById(tabId);
+      if (selectedContent) selectedContent.classList.remove('hidden');
+
+      const activeBtn = document.getElementById(`tabBtn-${tabId}`);
+      if (activeBtn) {
+        activeBtn.classList.remove('text-slate-400');
+        activeBtn.classList.add('bg-brand-600', 'text-white', 'shadow', 'font-semibold');
+      }
+
+      // If leaving scanner tab, stop camera to save battery
+      if (tabId !== 'scannerTab' && activeStream) {
+        stopCamera();
+      }
+
+      lucide.createIcons();
+    }
+
+    // ==========================================
+    // TENANT DIRECTORY CONTROLS
+    // ==========================================
+    function populateTenantDropdown() {
+      const select = document.getElementById('activeTenantSelect');
+      select.innerHTML = '';
+
+      tenants.forEach(t => {
+        const option = document.createElement('option');
+        option.value = t.id;
+        option.textContent = `${t.room} - ${t.name} (Meter: ${t.meterNo || 'N/A'})`;
+        if (t.id === selectedTenantId) option.selected = true;
+        select.appendChild(option);
+      });
+    }
+
+    function onTenantSelected() {
+      const select = document.getElementById('activeTenantSelect');
+      selectedTenantId = select.value;
+      const tenant = tenants.find(t => t.id === selectedTenantId);
+
+      if (tenant) {
+        document.getElementById('prevReadingInput').value = tenant.lastReading;
+        document.getElementById('prevDateText').textContent = `Last: ${tenant.lastBillingDate || 'New'}`;
+        calculateBill();
+      }
+    }
+
+    function renderTenantsList() {
+      const container = document.getElementById('tenantsListGrid');
+      container.innerHTML = '';
+
+      tenants.forEach(t => {
+        const card = document.createElement('div');
+        card.className = 'bg-slate-800 rounded-2xl p-4 border border-slate-700/80 shadow-md flex flex-col justify-between space-y-3';
+        card.innerHTML = `
+          <div>
+            <div class="flex items-start justify-between">
+              <div>
+                <span class="text-[10px] font-bold tracking-wider px-2 py-0.5 rounded bg-brand-500/20 text-brand-300 border border-brand-500/30 font-mono">${t.room}</span>
+                <h3 class="text-sm font-bold text-white mt-1.5">${t.name}</h3>
+              </div>
+              <div class="text-right">
+                <span class="text-[11px] font-mono text-slate-400">${t.meterNo || 'No Tag'}</span>
+              </div>
+            </div>
+
+            <div class="mt-3 pt-2.5 border-t border-slate-700/60 grid grid-cols-2 gap-2 text-xs">
+              <div>
+                <span class="text-[10px] text-slate-400 block">Baseline Reading:</span>
+                <span class="font-mono font-bold text-slate-200">${t.lastReading} kWh</span>
+              </div>
+              <div class="text-right">
+                <span class="text-[10px] text-slate-400 block">Phone:</span>
+                <span class="font-mono text-slate-300">${t.phone || 'N/A'}</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="flex items-center gap-2 pt-2 border-t border-slate-700/60">
+            <button onclick="billThisTenant('${t.id}')" class="flex-1 py-1.5 bg-brand-600/30 hover:bg-brand-600 text-brand-300 hover:text-white rounded-lg text-xs font-semibold transition border border-brand-500/30 flex items-center justify-center gap-1">
+              <i data-lucide="zap" class="w-3.5 h-3.5"></i> Bill Now
+            </button>
+            <button onclick="openEditTenantModal('${t.id}')" class="p-1.5 text-slate-400 hover:text-slate-200 bg-slate-700/60 hover:bg-slate-700 rounded-lg transition" title="Edit Tenant">
+              <i data-lucide="edit-3" class="w-4 h-4"></i>
+            </button>
+            <button onclick="deleteTenant('${t.id}')" class="p-1.5 text-rose-400 hover:text-rose-200 bg-rose-500/10 hover:bg-rose-500/20 rounded-lg transition" title="Delete Tenant">
+              <i data-lucide="trash-2" class="w-4 h-4"></i>
+            </button>
+          </div>
+        `;
+        container.appendChild(card);
+      });
+      lucide.createIcons();
+    }
+
+    function billThisTenant(tenantId) {
+      selectedTenantId = tenantId;
+      populateTenantDropdown();
+      onTenantSelected();
+      switchTab('scannerTab');
+      showToast(`Selected tenant for billing.`, 'info');
+    }
+
+    function openAddTenantModal() {
+      document.getElementById('tenantModalTitle').innerHTML = `<i data-lucide="user-plus" class="w-4 h-4 text-brand-400"></i> Add Submeter Tenant`;
+      document.getElementById('tenantEditId').value = '';
+      document.getElementById('tNameInput').value = '';
+      document.getElementById('tRoomInput').value = '';
+      document.getElementById('tMeterInput').value = '';
+      document.getElementById('tPhoneInput').value = '';
+      document.getElementById('tInitialReadingInput').value = '';
+      document.getElementById('tenantModal').classList.remove('hidden');
+      lucide.createIcons();
+    }
+
+    function openEditTenantModal(tenantId) {
+      const t = tenants.find(x => x.id === tenantId);
+      if (!t) return;
+      document.getElementById('tenantModalTitle').innerHTML = `<i data-lucide="edit-3" class="w-4 h-4 text-brand-400"></i> Edit Submeter Tenant`;
+      document.getElementById('tenantEditId').value = t.id;
+      document.getElementById('tNameInput').value = t.name;
+      document.getElementById('tRoomInput').value = t.room;
+      document.getElementById('tMeterInput').value = t.meterNo || '';
+      document.getElementById('tPhoneInput').value = t.phone || '';
+      document.getElementById('tInitialReadingInput').value = t.lastReading;
+      document.getElementById('tenantModal').classList.remove('hidden');
+      lucide.createIcons();
+    }
+
+    function closeTenantModal() {
+      document.getElementById('tenantModal').classList.add('hidden');
+    }
+
+    function handleSaveTenant(e) {
+      e.preventDefault();
+      const editId = document.getElementById('tenantEditId').value;
+      const name = document.getElementById('tNameInput').value.trim();
+      const room = document.getElementById('tRoomInput').value.trim();
+      const meterNo = document.getElementById('tMeterInput').value.trim() || `MTR-${Math.floor(100 + Math.random() * 900)}`;
+      const phone = document.getElementById('tPhoneInput').value.trim();
+      const initialReading = parseFloat(document.getElementById('tInitialReadingInput').value) || 0;
+
+      if (editId) {
+        const index = tenants.findIndex(x => x.id === editId);
+        if (index !== -1) {
+          tenants[index] = { ...tenants[index], name, room, meterNo, phone, lastReading: initialReading };
+          showToast(`Updated ${name}'s meter profile!`, 'success');
+        }
+      } else {
+        const newTenant = {
+          id: 't_' + Date.now(),
+          name,
+          room,
+          meterNo,
+          phone,
+          lastReading: initialReading,
+          lastBillingDate: new Date().toISOString().split('T')[0]
+        };
+        tenants.push(newTenant);
+        selectedTenantId = newTenant.id;
+        showToast(`Added ${name} to submeters!`, 'success');
+      }
+
+      closeTenantModal();
+      populateTenantDropdown();
+      onTenantSelected();
+      renderTenantsList();
+    }
+
+    function deleteTenant(tenantId) {
+      if (tenants.length <= 1) {
+        showToast('You must have at least one tenant.', 'error');
+        return;
+      }
+      tenants = tenants.filter(t => t.id !== tenantId);
+      selectedTenantId = tenants[0].id;
+      populateTenantDropdown();
+      onTenantSelected();
+      renderTenantsList();
+      showToast('Submeter removed.', 'info');
+    }
+
+    // ==========================================
+    // CAMERA & OCR SCANNING ENGINE
+    // ==========================================
+    async function toggleCamera() {
+      if (activeStream) {
+        stopCamera();
+      } else {
+        await startCamera();
+      }
+    }
+
+    async function startCamera() {
+      const video = document.getElementById('cameraVideo');
+      const placeholder = document.getElementById('scannerPlaceholder');
+      const imgPreview = document.getElementById('imagePreview');
+      const captureBtn = document.getElementById('captureRunBtn');
+      const camBtnText = document.getElementById('cameraBtnText');
+      const laser = document.getElementById('scanLaser');
+
+      try {
+        const constraints = {
+          video: {
+            facingMode: { ideal: 'environment' },
+            width: { ideal: 1280 },
+            height: { ideal: 720 }
+          }
+        };
+
+        activeStream = await navigator.mediaDevices.getUserMedia(constraints);
+        video.srcObject = activeStream;
+        video.classList.remove('hidden');
+        placeholder.classList.add('hidden');
+        imgPreview.classList.add('hidden');
+        laser.classList.remove('hidden');
+
+        captureBtn.disabled = false;
+        camBtnText.textContent = 'Stop Camera';
+        document.getElementById('scanStatusBadge').textContent = 'Live Feed';
+        document.getElementById('scanStatusBadge').className = 'text-[11px] px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 font-semibold border border-emerald-500/30';
+      } catch (err) {
+        console.error('Camera access error:', err);
+        showToast('Camera permission denied or not supported. You can upload a photo instead.', 'error');
+      }
+    }
+
+    function stopCamera() {
+      if (activeStream) {
+        activeStream.getTracks().forEach(track => track.stop());
+        activeStream = null;
+      }
+      const video = document.getElementById('cameraVideo');
+      video.classList.add('hidden');
+      document.getElementById('cameraBtnText').textContent = 'Start Camera';
+      document.getElementById('scanLaser').classList.add('hidden');
+      document.getElementById('scanStatusBadge').textContent = 'Ready';
+      document.getElementById('scanStatusBadge').className = 'text-[11px] px-2 py-0.5 rounded-full bg-slate-700 text-slate-300 font-medium';
+    }
+
+    function handleImageUpload(event) {
+      const file = event.target.files[0];
+      if (!file) return;
+
+      stopCamera();
+
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const img = document.getElementById('imagePreview');
+        img.src = e.target.result;
+        img.classList.remove('hidden');
+        document.getElementById('cameraVideo').classList.add('hidden');
+        document.getElementById('scannerPlaceholder').classList.add('hidden');
+        document.getElementById('captureRunBtn').disabled = false;
+        document.getElementById('scanStatusBadge').textContent = 'Photo Loaded';
+        
+        // Auto trigger OCR on uploaded picture
+        runOCRProcessing(img);
+      };
+      reader.readAsDataURL(file);
+    }
+
+    // Load synthetic/sample meter picture for immediate testing
+    function loadSampleMeterImage() {
+      stopCamera();
+      
+      // Generate realistic digital LCD meter graphic on offscreen canvas
+      const sampleCanvas = document.createElement('canvas');
+      sampleCanvas.width = 640;
+      sampleCanvas.height = 360;
+      const ctx = sampleCanvas.getContext('2d');
+
+      // Outer Meter Casing
+      ctx.fillStyle = '#1e293b';
+      ctx.fillRect(0, 0, 640, 360);
+
+      // Meter Nameplate
+      ctx.fillStyle = '#f8fafc';
+      ctx.roundRect(40, 30, 560, 300, 16);
+      ctx.fill();
+
+      // Header Branding
+      ctx.fillStyle = '#0f172a';
+      ctx.font = 'bold 18px sans-serif';
+      ctx.fillText('STATIC SINGLE PHASE SUBMETER', 70, 70);
+      ctx.font = '12px sans-serif';
+      ctx.fillStyle = '#64748b';
+      ctx.fillText('240V 5-30A 50Hz  1200 imp/kWh', 70, 92);
+
+      // LCD Bezel
+      ctx.fillStyle = '#0f172a';
+      ctx.roundRect(140, 120, 360, 110, 8);
+      ctx.fill();
+
+      // LCD Display Screen
+      ctx.fillStyle = '#86efac';
+      ctx.fillRect(150, 130, 340, 90);
+
+      // LCD Digits (Generates reading higher than typical previous readings)
+      const mockUnits = 1438.4;
+      ctx.fillStyle = '#022c22';
+      ctx.font = 'bold 52px monospace';
+      ctx.fillText('01438.4', 180, 195);
+
+      ctx.font = 'bold 16px sans-serif';
+      ctx.fillText('kWh', 435, 195);
+
+      // Barcode / Impulse LED
+      ctx.fillStyle = '#ef4444';
+      ctx.beginPath();
+      ctx.arc(80, 175, 8, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#475569';
+      ctx.font = '10px sans-serif';
+      ctx.fillText('CAL', 72, 198);
+
+      const dataUrl = sampleCanvas.toDataURL('image/png');
+      const img = document.getElementById('imagePreview');
+      img.src = dataUrl;
+      img.classList.remove('hidden');
+      document.getElementById('scannerPlaceholder').classList.add('hidden');
+      document.getElementById('captureRunBtn').disabled = false;
+      document.getElementById('scanStatusBadge').textContent = 'Sample Ready';
+
+      showToast('Sample submeter graphic generated! Scanning...', 'info');
+      runOCRProcessing(img);
+    }
+
+    function captureAndProcess() {
+      const video = document.getElementById('cameraVideo');
+      const img = document.getElementById('imagePreview');
+
+      if (activeStream && !video.classList.contains('hidden')) {
+        const cropCanvas = document.getElementById('cropCanvas');
+        cropCanvas.width = video.videoWidth || 640;
+        cropCanvas.height = video.videoHeight || 480;
+        const ctx = cropCanvas.getContext('2d');
+        ctx.drawImage(video, 0, 0, cropCanvas.width, cropCanvas.height);
+
+        img.src = cropCanvas.toDataURL('image/png');
+        img.classList.remove('hidden');
+        video.classList.add('hidden');
+        stopCamera();
+
+        runOCRProcessing(img);
+      } else if (!img.classList.contains('hidden') && img.src) {
+        runOCRProcessing(img);
+      } else {
+        showToast('Please start camera or upload an image first.', 'info');
+      }
+    }
+
+    async function runOCRProcessing(imageElement) {
+      const progressContainer = document.getElementById('ocrProgressContainer');
+      const progressBar = document.getElementById('ocrProgressBar');
+      const progressText = document.getElementById('ocrPercent');
+      const statusText = document.getElementById('ocrStatusText');
+      const laser = document.getElementById('scanLaser');
+
+      progressContainer.classList.remove('hidden');
+      laser.classList.remove('hidden');
+      progressBar.style.width = '10%';
+      progressText.textContent = '10%';
+      statusText.innerHTML = `<i data-lucide="loader-2" class="w-3.5 h-3.5 text-brand-400 animate-spin"></i> Preprocessing image contrast...`;
+      lucide.createIcons();
+
+      try {
+        // Step 1: Pre-process image on canvas (high contrast + binarization for crisp numbers)
+        const processedDataUrl = preprocessMeterImage(imageElement);
+
+        // Step 2: Run Tesseract with numbers whitelist
+        statusText.innerHTML = `<i data-lucide="cpu" class="w-3.5 h-3.5 text-brand-400 animate-spin"></i> Recognizing meter digits...`;
+        lucide.createIcons();
+
+        const worker = await Tesseract.createWorker('eng');
+        await worker.setParameters({
+          tessedit_char_whitelist: '0123456789.kWhKWH',
+        });
+
+        const result = await worker.recognize(processedDataUrl);
+        await worker.terminate();
+
+        progressBar.style.width = '100%';
+        progressText.textContent = '100%';
+
+        const rawText = result.data.text || '';
+        parseAndApplyOCRReading(rawText);
+
+      } catch (err) {
+        console.error('OCR Error:', err);
+        showToast('OCR scan failed. You can type reading manually.', 'error');
+      } finally {
+        setTimeout(() => {
+          progressContainer.classList.add('hidden');
+          laser.classList.add('hidden');
+        }, 800);
+      }
+    }
+
+    // Image pre-processing for meter displays: converts to grayscale and enhances black/white threshold
+    function preprocessMeterImage(imgElement) {
+      const canvas = document.createElement('canvas');
+      const width = imgElement.naturalWidth || imgElement.width || 600;
+      const height = imgElement.naturalHeight || imgElement.height || 400;
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext('2d');
+
+      ctx.drawImage(imgElement, 0, 0, width, height);
+
+      try {
+        const imgData = ctx.getImageData(0, 0, width, height);
+        const d = imgData.data;
+
+        // Grayscale + contrast enhancement
+        const factor = (259 * (128 + 255)) / (255 * (259 - 128)); // contrast factor
+        for (let i = 0; i < d.length; i += 4) {
+          // luminance formula
+          const gray = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
+          // contrast
+          const contrasted = factor * (gray - 128) + 128;
+          // binarize threshold
+          const val = contrasted > 125 ? 255 : 0;
+          d[i] = val;
+          d[i + 1] = val;
+          d[i + 2] = val;
+        }
+        ctx.putImageData(imgData, 0, 0);
+        return canvas.toDataURL('image/png');
+      } catch (e) {
+        // In case of cross-origin or canvas taint, return original source
+        return imgElement.src;
+      }
+    }
+
+    function parseAndApplyOCRReading(rawText) {
+      // Find all sequences of numbers, potentially with decimal points
+      const cleaned = rawText.replace(/[^\d.]/g, ' ');
+      const tokens = cleaned.split(/\s+/).filter(t => t.length >= 2);
+
+      // Parse candidate numbers
+      const candidates = [];
+      tokens.forEach(tok => {
+        const num = parseFloat(tok);
+        if (!isNaN(num) && num > 0 && num < 999999) {
+          candidates.push(num);
+        }
+      });
+
+      const suggestionsBox = document.getElementById('ocrSuggestionsBox');
+      const badgesList = document.getElementById('detectedBadgesList');
+      badgesList.innerHTML = '';
+
+      if (candidates.length > 0) {
+        suggestionsBox.classList.remove('hidden');
+
+        // Select the most likely reading (typically 4-6 digits, or largest reasonable number)
+        const primaryCandidate = candidates[0];
+
+        candidates.forEach((cand, idx) => {
+          const badge = document.createElement('button');
+          badge.type = 'button';
+          badge.className = `px-3 py-1 rounded-lg text-xs font-mono font-bold transition flex items-center gap-1.5 ${
+            idx === 0 
+              ? 'bg-brand-600 hover:bg-brand-500 text-white shadow ring-2 ring-brand-400/50' 
+              : 'bg-slate-700 hover:bg-slate-600 text-slate-200'
+          }`;
+          badge.innerHTML = `<span>${cand} kWh</span> ${idx === 0 ? '<span class="text-[10px] bg-brand-800/80 px-1 rounded">Primary</span>' : ''}`;
+          badge.onclick = () => {
+            document.getElementById('currReadingInput').value = cand;
+            calculateBill();
+            showToast(`Applied ${cand} kWh as current reading`, 'success');
+          };
+          badgesList.appendChild(badge);
+        });
+
+        // Pre-fill the input with the primary detected value
+        document.getElementById('currReadingInput').value = primaryCandidate;
+        calculateBill();
+        showToast(`Detected: ${primaryCandidate} kWh! Verified & updated.`, 'success');
+      } else {
+        suggestionsBox.classList.add('hidden');
+        showToast('Numbers unclear. Please enter current reading manually.', 'info');
+      }
+    }
+
+    // ==========================================
+    // BILL CALCULATION ENGINE (₹6.00 / UNIT)
+    // ==========================================
+    function calculateBill() {
+      const prev = parseFloat(document.getElementById('prevReadingInput').value) || 0;
+      const curr = parseFloat(document.getElementById('currReadingInput').value) || 0;
+      const fixed = parseFloat(document.getElementById('fixedChargeInput').value) || 0;
+      const common = parseFloat(document.getElementById('commonChargeInput').value) || 0;
+
+      const unitsDisplay = document.getElementById('unitsConsumedDisplay');
+      const rateMathDisplay = document.getElementById('rateMathDisplay');
+      const totalDisplay = document.getElementById('totalPayableDisplay');
+      const errAlert = document.getElementById('readingErrorAlert');
+      const genBtn = document.getElementById('genBillBtn');
+
+      if (curr < prev && curr > 0) {
+        errAlert.classList.remove('hidden');
+        document.getElementById('errPrevVal').textContent = prev;
+        unitsDisplay.innerHTML = `<span class="text-rose-400 font-bold">Invalid</span>`;
+        totalDisplay.textContent = '₹ 0.00';
+        genBtn.disabled = true;
+        genBtn.classList.add('opacity-50', 'cursor-not-allowed');
+        return;
+      }
+
+      errAlert.classList.add('hidden');
+      genBtn.disabled = false;
+      genBtn.classList.remove('opacity-50', 'cursor-not-allowed');
+
+      const unitsConsumed = Math.max(0, curr - prev);
+      const energyCharge = unitsConsumed * UNIT_RATE;
+      const totalPayable = energyCharge + fixed + common;
+
+      unitsDisplay.innerHTML = `${unitsConsumed.toFixed(2)} <span class="text-xs font-normal text-slate-400">Units</span>`;
+      rateMathDisplay.textContent = `${unitsConsumed.toFixed(2)} × ₹${UNIT_RATE.toFixed(2)}`;
+      totalDisplay.textContent = `₹ ${totalPayable.toFixed(2)}`;
+
+      return {
+        unitsConsumed,
+        energyCharge,
+        fixed,
+        common,
+        totalPayable
+      };
+    }
+
+    function toggleExtraCharges() {
+      const container = document.getElementById('extraChargesContainer');
+      const chevron = document.getElementById('extraChevron');
+      container.classList.toggle('hidden');
+      container.classList.toggle('grid');
+      chevron.classList.toggle('rotate-180');
+    }
+
+    // ==========================================
+    // INVOICE RECEIPT GENERATION & ACTIONS
+    // ==========================================
+    function generateAndOpenBill() {
+      const prev = parseFloat(document.getElementById('prevReadingInput').value);
+      const curr = parseFloat(document.getElementById('currReadingInput').value);
+
+      if (isNaN(curr) || curr === 0) {
+        showToast('Please enter or scan a valid Current Reading.', 'error');
+        return;
+      }
+
+      if (curr < prev) {
+        showToast('Current reading cannot be lower than previous reading.', 'error');
+        return;
+      }
+
+      const calc = calculateBill();
+      const tenant = tenants.find(t => t.id === selectedTenantId) || {
+        name: 'Tenant', room: 'General Unit', phone: '', meterNo: 'MTR-X'
+      };
+
+      const now = new Date();
+      const dateString = now.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+      const invoiceNum = `INV-${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}-${Math.floor(1000 + Math.random() * 9000)}`;
+
+      currentInvoiceData = {
+        id: invoiceNum,
+        tenantId: tenant.id,
+        tenantName: tenant.name,
+        room: tenant.room,
+        phone: tenant.phone,
+        meterNo: tenant.meterNo,
+        prevReading: prev,
+        currReading: curr,
+        units: calc.unitsConsumed,
+        rate: UNIT_RATE,
+        energyCharge: calc.energyCharge,
+        fixedCharge: calc.fixed,
+        commonCharge: calc.common,
+        total: calc.totalPayable,
+        date: dateString,
+        status: 'Unpaid'
+      };
+
+      // Populate Modal Fields
+      document.getElementById('invBillNo').textContent = invoiceNum;
+      document.getElementById('invDate').textContent = `Date: ${dateString}`;
+      document.getElementById('invTenantName').textContent = tenant.name;
+      document.getElementById('invTenantRoom').textContent = `Room / Unit: ${tenant.room}`;
+      document.getElementById('invTenantPhone').textContent = `Phone: ${tenant.phone || 'N/A'}`;
+      document.getElementById('invMeterNo').textContent = `Meter #: ${tenant.meterNo || 'N/A'}`;
+
+      document.getElementById('invCurrReading').textContent = `${curr.toFixed(2)} kWh`;
+      document.getElementById('invPrevReading').textContent = `${prev.toFixed(2)} kWh`;
+      document.getElementById('invUnits').textContent = `${calc.unitsConsumed.toFixed(2)} kWh`;
+      document.getElementById('invRateUnitsFormula').textContent = `${calc.unitsConsumed.toFixed(2)} units × ₹${UNIT_RATE.toFixed(2)}`;
+      document.getElementById('invEnergyCharge').textContent = `₹ ${calc.energyCharge.toFixed(2)}`;
+
+      const fixedRow = document.getElementById('invFixedRow');
+      if (calc.fixed > 0) {
+        fixedRow.classList.remove('hidden');
+        document.getElementById('invFixedCharge').textContent = `₹ ${calc.fixed.toFixed(2)}`;
+      } else {
+        fixedRow.classList.add('hidden');
+      }
+
+      const commonRow = document.getElementById('invCommonRow');
+      if (calc.common > 0) {
+        commonRow.classList.remove('hidden');
+        document.getElementById('invCommonCharge').textContent = `₹ ${calc.common.toFixed(2)}`;
+      } else {
+        commonRow.classList.add('hidden');
+      }
+
+      document.getElementById('invTotalAmount').textContent = `₹ ${calc.totalPayable.toFixed(2)}`;
+
+      // Save to in-memory history & update tenant's baseline for subsequent cycles
+      billsHistory.unshift(currentInvoiceData);
+      tenant.lastReading = curr;
+      tenant.lastBillingDate = dateString;
+
+      renderHistoryList();
+      renderTenantsList();
+
+      document.getElementById('invoiceModal').classList.remove('hidden');
+      showToast('Bill generated & saved to history!', 'success');
+      lucide.createIcons();
+    }
+
+    function closeInvoiceModal() {
+      document.getElementById('invoiceModal').classList.add('hidden');
+    }
+
+    function constructWhatsAppMessage(data) {
+      return (
+        `*⚡ SUBMETER ELECTRICITY BILL*\n` +
+        `------------------------------------\n` +
+        `*Bill No:* ${data.id}\n` +
+        `*Date:* ${data.date}\n` +
+        `*Tenant:* ${data.tenantName} (${data.room})\n` +
+        `*Meter No:* ${data.meterNo || 'Standard'}\n` +
+        `------------------------------------\n` +
+        `• Current Reading: *${data.currReading} kWh*\n` +
+        `• Previous Reading: *${data.prevReading} kWh*\n` +
+        `• Units Consumed: *${data.units.toFixed(2)} Units*\n` +
+        `• Tariff Rate: *₹${data.rate.toFixed(2)} / Unit*\n` +
+        `------------------------------------\n` +
+        `• Energy Charge: ₹${data.energyCharge.toFixed(2)}\n` +
+        (data.fixedCharge > 0 ? `• Fixed Charge: ₹${data.fixedCharge.toFixed(2)}\n` : '') +
+        (data.commonCharge > 0 ? `• Common Charge: ₹${data.commonCharge.toFixed(2)}\n` : '') +
+        `*👉 TOTAL PAYABLE: ₹${data.total.toFixed(2)}*\n` +
+        `------------------------------------\n` +
+        `_Please clear via UPI/Cash within 5 days. Thank you!_`
+      );
+    }
+
+    function sendInvoiceWhatsApp() {
+      if (!currentInvoiceData) return;
+      const text = encodeURIComponent(constructWhatsAppMessage(currentInvoiceData));
+      const cleanPhone = (currentInvoiceData.phone || '').replace(/\D/g, '');
+      const phoneParam = cleanPhone.length >= 10 ? `91${cleanPhone.slice(-10)}` : '';
+      const url = phoneParam 
+        ? `https://api.whatsapp.com/send?phone=${phoneParam}&text=${text}`
+        : `https://api.whatsapp.com/send?text=${text}`;
+      window.open(url, '_blank');
+    }
+
+    function sendDirectWhatsApp() {
+      const calc = calculateBill();
+      if (!calc || calc.unitsConsumed === 0) {
+        showToast('Please calculate reading before sharing.', 'error');
+        return;
+      }
+      const tenant = tenants.find(t => t.id === selectedTenantId);
+      const quickData = {
+        id: `MTR-${Date.now().toString().slice(-4)}`,
+        date: new Date().toLocaleDateString('en-IN'),
+        tenantName: tenant ? tenant.name : 'Tenant',
+        room: tenant ? tenant.room : 'Flat',
+        meterNo: tenant ? tenant.meterNo : 'Submeter',
+        phone: tenant ? tenant.phone : '',
+        currReading: parseFloat(document.getElementById('currReadingInput').value),
+        prevReading: parseFloat(document.getElementById('prevReadingInput').value),
+        units: calc.unitsConsumed,
+        rate: UNIT_RATE,
+        energyCharge: calc.energyCharge,
+        fixedCharge: calc.fixed,
+        commonCharge: calc.common,
+        total: calc.totalPayable
+      };
+      const text = encodeURIComponent(constructWhatsAppMessage(quickData));
+      const cleanPhone = (quickData.phone || '').replace(/\D/g, '');
+      const phoneParam = cleanPhone.length >= 10 ? `91${cleanPhone.slice(-10)}` : '';
+      const url = phoneParam 
+        ? `https://api.whatsapp.com/send?phone=${phoneParam}&text=${text}`
+        : `https://api.whatsapp.com/send?text=${text}`;
+      window.open(url, '_blank');
+    }
+
+    function copyBillText() {
+      if (!currentInvoiceData) return;
+      const text = constructWhatsAppMessage(currentInvoiceData);
+      
+      // Iframe-safe copy fallback
+      const textArea = document.createElement("textarea");
+      textArea.value = text;
+      textArea.style.position = "fixed";
+      textArea.style.left = "-999999px";
+      textArea.style.top = "-999999px";
+      document.body.appendChild(textArea);
+      textArea.focus();
+      textArea.select();
+      
+      try {
+        document.execCommand('copy');
+        showToast('Invoice summary copied to clipboard!', 'success');
+      } catch (err) {
+        showToast('Failed to copy summary.', 'error');
+      }
+      document.body.removeChild(textArea);
+    }
+
+    // ==========================================
+    // BILL HISTORY & EXPORT
+    // ==========================================
+    function renderHistoryList() {
+      const container = document.getElementById('historyList');
+      const badge = document.getElementById('historyCountBadge');
+      badge.textContent = billsHistory.length;
+      container.innerHTML = '';
+
+      if (billsHistory.length === 0) {
+        container.innerHTML = `
+          <div class="text-center py-12 bg-slate-800/40 rounded-2xl border border-slate-700/60 p-6 space-y-2">
+            <i data-lucide="receipt" class="w-10 h-10 text-slate-600 mx-auto"></i>
+            <p class="text-sm font-semibold text-slate-300">No invoices generated yet</p>
+            <p class="text-xs text-slate-500">Scan meter readings in the first tab to generate tenant bills.</p>
+          </div>
+        `;
+        lucide.createIcons();
+        return;
+      }
+
+      billsHistory.forEach(bill => {
+        const item = document.createElement('div');
+        item.className = 'bg-slate-800 rounded-2xl p-4 border border-slate-700/70 shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-3';
+        item.innerHTML = `
+          <div class="space-y-1">
+            <div class="flex items-center gap-2">
+              <span class="font-mono text-xs font-bold text-brand-400">${bill.id}</span>
+              <span class="text-[10px] px-2 py-0.5 rounded-full ${bill.status === 'Paid' ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30' : 'bg-amber-500/20 text-amber-300 border border-amber-500/30'} font-semibold">${bill.status}</span>
+              <span class="text-[11px] text-slate-400">• ${bill.date}</span>
+            </div>
+            <div class="text-sm font-bold text-white flex items-center gap-2">
+              <span>${bill.tenantName}</span>
+              <span class="text-xs text-slate-400 font-normal">(${bill.room})</span>
+            </div>
+            <div class="text-xs text-slate-400 font-mono">
+              ${bill.prevReading} → ${bill.currReading} (${bill.units.toFixed(2)} units @ ₹6/u)
+            </div>
+          </div>
+
+          <div class="flex items-center justify-between sm:justify-end gap-3 pt-2 sm:pt-0 border-t sm:border-t-0 border-slate-700/60">
+            <div class="text-right">
+              <span class="text-[10px] text-slate-400 block">Total Amount</span>
+              <span class="text-base font-bold font-mono text-emerald-400">₹ ${bill.total.toFixed(2)}</span>
+            </div>
+            <div class="flex items-center gap-1.5">
+              <button onclick="toggleBillStatus('${bill.id}')" class="p-2 text-xs bg-slate-700 hover:bg-slate-600 rounded-xl text-slate-300 transition" title="Toggle Paid/Unpaid">
+                <i data-lucide="${bill.status === 'Paid' ? 'rotate-ccw' : 'check'}" class="w-4 h-4"></i>
+              </button>
+              <button onclick="viewHistoricalBill('${bill.id}')" class="px-3 py-2 text-xs bg-brand-600 hover:bg-brand-500 rounded-xl text-white font-bold transition flex items-center gap-1 shadow">
+                <i data-lucide="eye" class="w-3.5 h-3.5"></i>
+                <span>View</span>
+              </button>
+            </div>
+          </div>
+        `;
+        container.appendChild(item);
+      });
+
+      lucide.createIcons();
+    }
+
+    function toggleBillStatus(billId) {
+      const bill = billsHistory.find(b => b.id === billId);
+      if (bill) {
+        bill.status = bill.status === 'Paid' ? 'Unpaid' : 'Paid';
+        renderHistoryList();
+        showToast(`Invoice marked as ${bill.status}!`, 'info');
+      }
+    }
+
+    function viewHistoricalBill(billId) {
+      const bill = billsHistory.find(b => b.id === billId);
+      if (!bill) return;
+
+      currentInvoiceData = bill;
+
+      document.getElementById('invBillNo').textContent = bill.id;
+      document.getElementById('invDate').textContent = `Date: ${bill.date}`;
+      document.getElementById('invTenantName').textContent = bill.tenantName;
+      document.getElementById('invTenantRoom').textContent = `Room / Unit: ${bill.room}`;
+      document.getElementById('invTenantPhone').textContent = `Phone: ${bill.phone || 'N/A'}`;
+      document.getElementById('invMeterNo').textContent = `Meter #: ${bill.meterNo || 'N/A'}`;
+
+      document.getElementById('invCurrReading').textContent = `${bill.currReading.toFixed(2)} kWh`;
+      document.getElementById('invPrevReading').textContent = `${bill.prevReading.toFixed(2)} kWh`;
+      document.getElementById('invUnits').textContent = `${bill.units.toFixed(2)} kWh`;
+      document.getElementById('invRateUnitsFormula').textContent = `${bill.units.toFixed(2)} units × ₹${bill.rate.toFixed(2)}`;
+      document.getElementById('invEnergyCharge').textContent = `₹ ${bill.energyCharge.toFixed(2)}`;
+
+      const fixedRow = document.getElementById('invFixedRow');
+      if (bill.fixedCharge > 0) {
+        fixedRow.classList.remove('hidden');
+        document.getElementById('invFixedCharge').textContent = `₹ ${bill.fixedCharge.toFixed(2)}`;
+      } else {
+        fixedRow.classList.add('hidden');
+      }
+
+      const commonRow = document.getElementById('invCommonRow');
+      if (bill.commonCharge > 0) {
+        commonRow.classList.remove('hidden');
+        document.getElementById('invCommonCharge').textContent = `₹ ${bill.commonCharge.toFixed(2)}`;
+      } else {
+        commonRow.classList.add('hidden');
+      }
+
+      document.getElementById('invTotalAmount').textContent = `₹ ${bill.total.toFixed(2)}`;
+
+      document.getElementById('invoiceModal').classList.remove('hidden');
+      lucide.createIcons();
+    }
+
+    function exportHistoryCSV() {
+      if (billsHistory.length === 0) {
+        showToast('No history available to export.', 'info');
+        return;
+      }
+
+      let csvContent = 'data:text/csv;charset=utf-8,';
+      csvContent += 'Invoice ID,Date,Tenant Name,Room,Meter No,Previous (kWh),Current (kWh),Units Consumed,Rate,Energy Charge (INR),Fixed (INR),Common (INR),Total (INR),Status\n';
+
+      billsHistory.forEach(b => {
+        const row = [
+          b.id,
+          b.date,
+          `"${b.tenantName}"`,
+          `"${b.room}"`,
+          b.meterNo || '',
+          b.prevReading,
+          b.currReading,
+          b.units,
+          b.rate,
+          b.energyCharge,
+          b.fixedCharge,
+          b.commonCharge,
+          b.total,
+          b.status
+        ].join(',');
+        csvContent += row + '\n';
+      });
+
+      const encodedUri = encodeURI(csvContent);
+      const link = document.createElement('a');
+      link.setAttribute('href', encodedUri);
+      link.setAttribute('download', `Submeter_Bills_${new Date().toISOString().split('T')[0]}.csv`);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      showToast('Downloaded billing history CSV!', 'success');
+    }
+
+    // ==========================================
+    // TOAST SYSTEM (In-app notification)
+    // ==========================================
+    let toastTimeout;
+    function showToast(message, type = 'info') {
+      const toast = document.getElementById('toast');
+      const text = document.getElementById('toastMessage');
+      const icon = document.getElementById('toastIcon');
+
+      clearTimeout(toastTimeout);
+
+      text.textContent = message;
+
+      toast.className = 'fixed bottom-6 left-1/2 -translate-x-1/2 z-50 px-4 py-2.5 rounded-xl text-xs font-semibold shadow-2xl transition-all duration-300 transform flex items-center gap-2 pointer-events-none ';
+      
+      if (type === 'success') {
+        toast.className += 'bg-emerald-600 text-white border border-emerald-400/40 translate-y-0 opacity-100';
+        icon.setAttribute('data-lucide', 'check-circle-2');
+      } else if (type === 'error') {
+        toast.className += 'bg-rose-600 text-white border border-rose-400/40 translate-y-0 opacity-100';
+        icon.setAttribute('data-lucide', 'alert-circle');
+      } else {
+        toast.className += 'bg-slate-800 text-slate-100 border border-slate-600 translate-y-0 opacity-100';
+        icon.setAttribute('data-lucide', 'info');
+      }
+
+      lucide.createIcons();
+
+      toastTimeout = setTimeout(() => {
+        toast.classList.add('translate-y-20', 'opacity-0');
+      }, 3500);
+    }
+  </script>
+</body>
+</html>
